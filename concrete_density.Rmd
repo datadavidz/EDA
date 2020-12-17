@@ -1,0 +1,109 @@
+---
+title: "Concrete Density"
+author: "datadavidz"
+date: "12/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(knitr)
+library(readxl)
+library(tidyverse)
+library(glmnet)
+
+theme_set(theme_light())
+```
+
+```{r, include=FALSE}
+filename <- "Concrete_Data.xls"
+
+folder <- "./data/"
+numberCols <- 9 #total number of columns in spreadsheet
+
+colTypes <- rep("numeric", numberCols)
+concrete_tbl <- read_excel(path = paste0(folder, filename), col_types = colTypes)
+
+concrete_tbl <- concrete_tbl %>%
+  rename(cement = starts_with("Cement")) %>%
+  rename(blast_furnace_slag = starts_with("Blast")) %>%
+  rename(fly_ash = starts_with("Fly Ash")) %>%
+  rename(water = starts_with("Water")) %>%
+  rename(superplasticizer = starts_with("Super")) %>%
+  rename(coarse_aggregate = starts_with("Coarse")) %>%
+  rename(fine_aggregate = starts_with("Fine")) %>%
+  rename(age = starts_with("Age")) %>%
+  rename(compressive_strength = starts_with("Concrete"))
+```
+
+Add a column for stated volume (m^3^ total mixture volume)
+```{r}
+concrete_tbl <- concrete_tbl %>% mutate(total_vol = 1000)
+```
+
+Solve for all densities
+```{r}
+volFunc <- function(cement, blast_furnace_slag, fly_ash, water, coarse_aggregate, fine_aggregate, a, b, c, d, e, f) {
+  a * cement + b * blast_furnace_slag + c * fly_ash + d * water + e * coarse_aggregate + f * fine_aggregate}
+
+volFit <- with(concrete_tbl, nls(total_vol ~ volFunc(cement, blast_furnace_slag, fly_ash, water, coarse_aggregate, fine_aggregate, a, b, c, d, e, f), start=list(a=1, b=1, c=1, d=1, e=1, f=1)))
+
+summary(volFit)
+```
+Same equation but water density is fixed at 1
+```{r}
+volFunc <- function(cement, blast_furnace_slag, fly_ash, water, coarse_aggregate, fine_aggregate, a, b, c, e, f) {
+  a * cement + b * blast_furnace_slag + c * fly_ash + water + e * coarse_aggregate + f * fine_aggregate}
+
+volFit <- with(concrete_tbl, nls(total_vol ~ volFunc(cement, blast_furnace_slag, fly_ash, water, coarse_aggregate, fine_aggregate, a, b, c, e, f), start=list(a=0.5, b=0.5, c=0.5, e=0.5, f=0.5)))
+
+summary(volFit)
+```
+Linear Model
+```{r}
+volFit <- lm(total_vol ~ cement + blast_furnace_slag + fly_ash + water + superplasticizer + coarse_aggregate + fine_aggregate - 1, data = concrete_tbl)
+
+summary(volFit)
+```
+
+Predict volume based on fit
+```{r}
+concrete_tbl <- concrete_tbl %>% mutate(pred_vol = predict(volFit))
+```
+
+```{r}
+concrete_tbl %>%
+  ggplot(aes(pred_vol)) +
+  geom_histogram(bins = 50)
+```
+RMSE
+```{r}
+sqrt(mean((concrete_tbl$total_vol - concrete_tbl$pred_vol)^2))
+```
+
+Generalized Linear Model (didn't work due to y being constant)
+```{r}
+y <- concrete_tbl$total_vol
+x <- concrete_tbl %>% select(cement, blast_furnace_slag, fly_ash, water, superplasticizer, coarse_aggregate, fine_aggregate) %>% data.matrix()
+
+glmnet(x, y, alpha = 0, lambda = 0.1)
+
+#summary(volFit)
+```
+
+```{r}
+library(broom)
+
+spec_vol <- tidy(volFit) %>%
+  select(term, estimate) %>%
+  rename(ingredient = term,
+         specific_volume = estimate)
+```
+
+```{r}
+saveRDS(spec_vol, "./results/concrete_spec_vol.rds")
+```
+
